@@ -419,14 +419,29 @@ impl<S: Signer> Installer<S> {
             config.push_str("\n\n");
         }
 
-        // Generate menu entries for each generation
-        for generation in generations.iter().rev() {
-            let stub_path = stub_name(generation, &self.signer)?;
+        // Generate menu entry with the latest generation as the main item
+        // and older generations as submenus
+        let mut generations_rev = generations.iter().rev();
+
+        if let Some(latest_generation) = generations_rev.next() {
+            let stub_path = stub_name(latest_generation, &self.signer)?;
             let stub_efi_path = format!("\\EFI\\Linux\\{}", stub_path.display());
 
-            config.push_str(&format!("menuentry \"{}\" {{\n", generation.describe()));
+            config.push_str(&format!("menuentry \"{}\" {{\n", latest_generation.describe()));
             config.push_str(&format!("    loader {}\n", stub_efi_path));
             config.push_str("    graphics on\n");
+
+            // Add older generations as submenus
+            for generation in generations_rev {
+                let stub_path = stub_name(generation, &self.signer)?;
+                let stub_efi_path = format!("\\EFI\\Linux\\{}", stub_path.display());
+
+                config.push_str(&format!("    submenuentry \"{}\" {{\n", generation.describe()));
+                config.push_str(&format!("        loader {}\n", stub_efi_path));
+                config.push_str("        graphics on\n");
+                config.push_str("    }\n");
+            }
+
             config.push_str("}\n\n");
         }
 
