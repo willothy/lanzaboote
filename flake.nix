@@ -52,10 +52,18 @@
       );
     in
     {
+      # Utility functions, e.g. lanzaboote.lib.fetchRefindTheme.
+      lib = import ./nix/lib;
+
       nixosModules = {
         default = self.nixosModules.lanzaboote;
         lanzaboote = (
-          { pkgs, lib, ... }:
+          {
+            config,
+            pkgs,
+            lib,
+            ...
+          }:
           {
             imports = [
               ./nix/modules/lanzaboote.nix
@@ -65,7 +73,12 @@
               let
                 system = pkgs.stdenv.hostPlatform.system;
               in
-              lib.mkDefault self.packages.${system}.lzbt;
+              lib.mkDefault (
+                if config.boot.lanzaboote.bootloader == "refind" then
+                  self.packages.${system}.lzbt-refind
+                else
+                  self.packages.${system}.lzbt
+              );
           }
         );
       };
@@ -88,6 +101,10 @@
           stub = checks.stub.package;
           stubClippy = checks.stub.clippy;
           stubRustfmt = checks.stub.rustfmt;
+
+          refindTool = checks.lzbt-refind.package;
+          refindToolClippy = checks.lzbt-refind.clippy;
+          refindToolRustfmt = checks.lzbt-refind.rustfmt;
 
           docsHtml = checks.docs.html;
           docsOptions = checks.docs.options;

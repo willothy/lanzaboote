@@ -4,12 +4,11 @@
   makeBinaryWrapper,
   binutils-unwrapped,
   sbsigntool,
-  systemd,
   stub,
 }:
 
 buildRustApp {
-  pname = "lzbt-systemd";
+  pname = "lzbt-refind";
   src = lib.sourceFilesBySuffices ../../rust/tool [
     ".rs"
     ".toml"
@@ -18,7 +17,7 @@ buildRustApp {
     ".pem"
     ".key"
   ];
-  packages = [ "lzbt-systemd" ];
+  packages = [ "lzbt-refind" ];
   packageArgs = {
     nativeBuildInputs = [
       makeBinaryWrapper
@@ -29,8 +28,6 @@ buildRustApp {
       sbsigntool
     ];
 
-    env.TEST_SYSTEMD = systemd;
-
     postInstall =
       let
         path = lib.makeBinPath [
@@ -39,11 +36,11 @@ buildRustApp {
         ];
       in
       ''
-        makeWrapper $out/bin/lzbt-systemd $out/bin/lzbt \
+        wrapProgram $out/bin/lzbt-refind \
           --prefix PATH : ${path} \
           --set LANZABOOTE_STUB ${stub}/bin/lanzaboote_stub.efi
       '';
 
-    meta.mainProgram = "lzbt";
+    meta.mainProgram = "lzbt-refind";
   };
 }

@@ -82,6 +82,13 @@ installs the UKI along with other required files to the
 ESP. `lzbt` is also aware of multiple NixOS generations and will
 sign all configurations that should be bootable.
 
+We have multiple backends for `lzbt`:
+
+- `lzbt-systemd` lives in [`rust/tool/systemd`](rust/tool/systemd) - Uses systemd-boot as the bootloader
+- `lzbt-refind` lives in [`rust/tool/refind`](rust/tool/refind) - Uses rEFInd as the bootloader
+
+Shared code lives in [`rust/tool/shared`](rust/tool/shared).
+
 ### Stub
 
 When the Linux kernel and initrd are packed into a UKI, they need an

@@ -17,6 +17,21 @@ let
 
   configurationLimit = if cfg.configurationLimit == null then 0 else cfg.configurationLimit;
 
+  # Arguments selecting and configuring the backing boot loader.
+  bootloaderArgs =
+    if cfg.bootloader == "refind" then
+      [
+        "--refind ${cfg.refind.package}"
+      ]
+      ++ lib.optional (
+        cfg.refind.configTemplate != null
+      ) "--refind-config-template ${cfg.refind.configTemplate}"
+    else
+      [
+        "--systemd ${config.systemd.package}"
+        "--systemd-boot-loader-config ${loaderConfigFile}"
+      ];
+
   efiSysMountPoints = [
     espMountPoint
   ]
@@ -99,6 +114,20 @@ in
   options.boot.lanzaboote = {
     enable = lib.mkEnableOption "Enable the LANZABOOTE";
 
+    bootloader = lib.mkOption {
+      type = lib.types.enum [
+        "systemd-boot"
+        "refind"
+      ];
+      default = "systemd-boot";
+      description = ''
+        Which bootloader to use with Lanzaboote.
+
+        - systemd-boot: Simple UEFI boot manager (default)
+        - refind: Graphical UEFI boot manager with advanced features
+      '';
+    };
+
     configurationLimit = lib.mkOption {
       default = config.boot.loader.systemd-boot.configurationLimit;
       defaultText = "config.boot.loader.systemd-boot.configurationLimit";
@@ -134,8 +163,8 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.lzbt;
-      defaultText = lib.literalExpression "pkgs.lzbt";
+      default = if cfg.bootloader == "refind" then pkgs.lzbt-refind else pkgs.lzbt;
+      defaultText = lib.literalExpression "pkgs.lzbt, or pkgs.lzbt-refind when bootloader is \"refind\"";
       description = "Lanzaboote tool (lzbt) package";
     };
 
@@ -230,16 +259,14 @@ in
         # always, even in the cross compilation case, be the right system.
         ${lib.getExe cfg.package} ${lib.optionalString (cfg.logLevel == "debug") "-vv"} install \
           --system ${config.boot.kernelPackages.stdenv.hostPlatform.system} \
-          --systemd ${config.systemd.package} \
-          --systemd-boot-loader-config ${loaderConfigFile} \
+          ${lib.concatStringsSep " \\\n          " bootloaderArgs} \
           --configuration-limit ${toString configurationLimit} \
           --allow-unsigned ${lib.boolToString cfg.allowUnsigned} \
           --bootcounting-initial-tries ${toString cfg.bootCounting.initialTries}'';
       defaultText = lib.literalExpression ''
         ''${lib.getExe config.boot.lanzaboote.package} ''${lib.optionalString (config.boot.lanzaboote.logLevel == "debug") "-vv"} install \
           --system ''${config.boot.kernelPackages.stdenv.hostPlatform.system} \
-          --systemd ''${config.systemd.package} \
-          --systemd-boot-loader-config ''${loaderConfigFile} \
+          ''${lib.concatStringsSep " \\\n          " bootloaderArgs} \
           --configuration-limit ''${toString configurationLimit} \
           --allow-unsigned ''${lib.boolToString config.boot.lanzaboote.allowUnsigned} \
           --bootcounting-initial-tries ''${toString config.boot.lanzaboote.bootCounting.initialTries}'';
@@ -412,6 +439,24 @@ in
             you generally don't need to reboot after autoCryptenroll.
           '';
         };
+      };
+    };
+
+    refind = {
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.refind;
+        defaultText = lib.literalExpression "pkgs.refind";
+        description = "rEFInd package to use";
+      };
+
+      configTemplate = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = ''
+          Optional custom rEFInd configuration template.
+          This will be appended to the auto-generated configuration.
+        '';
       };
     };
   };

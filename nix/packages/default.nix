@@ -71,4 +71,8 @@ rec {
     inherit buildRustApp;
     inherit stub;
   };
+  lzbt-refind = pkgs.callPackage ./lzbt-refind.nix {
+    inherit buildRustApp;
+    inherit stub;
+  };
 }

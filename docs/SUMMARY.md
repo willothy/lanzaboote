@@ -15,6 +15,7 @@
 - [Enable Measured Boot](how-to-guides/enable-measured-boot.md)
 - [Install on Multiple ESPs](how-to-guides/install-on-multiple-esps.md)
 - [Disable Measured Boot](how-to-guides/disable-measured-boot.md)
+- [Use rEFInd](how-to-guides/use-refind.md)
 
 # Explanation
 

@@ -12,10 +12,14 @@ let
   inherit (pkgs) lib;
 in
 rec {
-  nixosModules.lanzaboote = {
-    imports = [ ./nix/modules/lanzaboote.nix ];
-    boot.lanzaboote.package = lib.mkDefault packages.lzbt;
-  };
+  nixosModules.lanzaboote =
+    { config, ... }:
+    {
+      imports = [ ./nix/modules/lanzaboote.nix ];
+      boot.lanzaboote.package = lib.mkDefault (
+        if config.boot.lanzaboote.bootloader == "refind" then packages.lzbt-refind else packages.lzbt
+      );
+    };
 
   packages = lib.recurseIntoAttrs (
     import ./nix/packages {
@@ -42,6 +46,14 @@ rec {
     lzbt = lib.recurseIntoAttrs {
       package = packages.stub;
       inherit (packages.stub.tests)
+        clippy
+        rustfmt
+        ;
+    };
+
+    lzbt-refind = lib.recurseIntoAttrs {
+      package = packages.lzbt-refind;
+      inherit (packages.lzbt-refind.tests)
         clippy
         rustfmt
         ;
