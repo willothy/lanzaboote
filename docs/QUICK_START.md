@@ -156,6 +156,16 @@ in
 }
 ```
 
+**Note:** By default, Lanzaboote uses systemd-boot as the bootloader. If you want to use rEFInd instead, you can set:
+
+```nix
+  boot.lanzaboote = {
+    enable = true;
+    pkiBundle = "/var/lib/sbctl";
+    bootloader = "refind";  # Use rEFInd instead of systemd-boot
+  };
+```
+
 ### Configuring NixOS (with Flakes)
 
 Below is a fragment of a NixOS configuration that enables the Secure

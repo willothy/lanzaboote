@@ -165,12 +165,42 @@
               --set PATH ${lib.makeBinPath [ pkgs.binutils-unwrapped pkgs.sbsigntool ]} \
               --set LANZABOOTE_STUB ${stub}/bin/lanzaboote_stub.efi
           '';
+
+          # rEFInd tool variant
+          refindToolCrane = buildRustApp {
+            pname = "lzbt-refind";
+            src = ./rust/tool;
+            extraArgs = {
+              nativeCheckInputs = with pkgs; [
+                binutils-unwrapped
+                sbsigntool
+              ];
+            };
+          };
+
+          refindTool = refindToolCrane.package;
+
+          wrappedRefindTool = pkgs.runCommand "lzbt-refind"
+            {
+              nativeBuildInputs = [ pkgs.makeWrapper ];
+              meta.mainProgram = "lzbt-refind";
+            } ''
+            mkdir -p $out/bin
+
+            # Clean PATH to only contain what we need to do objcopy. Also
+            # tell lanzatool where to find our UEFI binaries.
+            makeWrapper ${refindTool}/bin/lzbt-refind $out/bin/lzbt-refind \
+              --set PATH ${lib.makeBinPath [ pkgs.binutils-unwrapped pkgs.sbsigntool ]} \
+              --set LANZABOOTE_STUB ${stub}/bin/lanzaboote_stub.efi
+          '';
         in
         {
           packages = {
             inherit stub;
             tool = wrappedTool;
             lzbt = wrappedTool;
+            refind-tool = wrappedRefindTool;
+            lzbt-refind = wrappedRefindTool;
           };
 
           overlayAttrs = {
@@ -182,6 +212,8 @@
             stubClippy = stubCrane.clippy;
             toolFmt = toolCrane.rustfmt;
             stubFmt = stubCrane.rustfmt;
+            refindToolClippy = refindToolCrane.clippy;
+            refindToolFmt = refindToolCrane.rustfmt;
           } // (import ./nix/tests {
             inherit pkgs;
             extraBaseModules = {
@@ -210,6 +242,7 @@
             inputsFrom = [
               config.packages.stub
               config.packages.tool
+              config.packages.refind-tool
             ];
 
             TEST_SYSTEMD = pkgs.systemd;

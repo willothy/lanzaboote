@@ -61,6 +61,17 @@ in
       description = "Lanzaboote tool (lzbt) package";
     };
 
+    bootloader = lib.mkOption {
+      type = lib.types.enum [ "systemd-boot" "refind" ];
+      default = "systemd-boot";
+      description = ''
+        Which bootloader to use with Lanzaboote.
+        
+        - "systemd-boot": Use systemd-boot as the bootloader (default)
+        - "refind": Use rEFInd as the bootloader
+      '';
+    };
+
     settings = lib.mkOption {
       type = lib.types.submodule {
         freeformType = loaderSettingsFormat.type;
@@ -121,25 +132,39 @@ in
     boot.loader.supportsInitrdSecrets = true;
     boot.loader.external = {
       enable = true;
-      installHook = pkgs.writeShellScript "bootinstall" ''
-        ${lib.optionalString cfg.enrollKeys ''
-          ${lib.getExe' pkgs.coreutils "mkdir"} -p /tmp/pki
-          ${lib.getExe' pkgs.coreutils "cp"} -r ${cfg.pkiBundle}/* /tmp/pki
-          ${lib.getExe sbctlWithPki} enroll-keys --yes-this-might-brick-my-machine
-        ''}
+      installHook = pkgs.writeShellScript "bootinstall" (
+        ''
+          ${lib.optionalString cfg.enrollKeys ''
+            ${lib.getExe' pkgs.coreutils "mkdir"} -p /tmp/pki
+            ${lib.getExe' pkgs.coreutils "cp"} -r ${cfg.pkiBundle}/* /tmp/pki
+            ${lib.getExe sbctlWithPki} enroll-keys --yes-this-might-brick-my-machine
+          ''}
 
-        # Use the system from the kernel's hostPlatform because this should
-        # always, even in the cross compilation case, be the right system.
-        ${lib.getExe cfg.package} install \
-          --system ${config.boot.kernelPackages.stdenv.hostPlatform.system} \
-          --systemd ${config.systemd.package} \
-          --systemd-boot-loader-config ${loaderConfigFile} \
-          --public-key ${cfg.publicKeyFile} \
-          --private-key ${cfg.privateKeyFile} \
-          --configuration-limit ${toString configurationLimit} \
-          ${config.boot.loader.efi.efiSysMountPoint} \
-          /nix/var/nix/profiles/system-*-link
-      '';
+          # Use the system from the kernel's hostPlatform because this should
+          # always, even in the cross compilation case, be the right system.
+        '' + 
+        (if cfg.bootloader == "systemd-boot" then ''
+          ${lib.getExe cfg.package} install \
+            --system ${config.boot.kernelPackages.stdenv.hostPlatform.system} \
+            --systemd ${config.systemd.package} \
+            --systemd-boot-loader-config ${loaderConfigFile} \
+            --public-key ${cfg.publicKeyFile} \
+            --private-key ${cfg.privateKeyFile} \
+            --configuration-limit ${toString configurationLimit} \
+            ${config.boot.loader.efi.efiSysMountPoint} \
+            /nix/var/nix/profiles/system-*-link
+        '' else if cfg.bootloader == "refind" then ''
+          ${lib.getExe pkgs.lzbt-refind} install \
+            --system ${config.boot.kernelPackages.stdenv.hostPlatform.system} \
+            --refind ${pkgs.refind} \
+            --refind-config ${pkgs.writeText "refind.conf" ""} \
+            --public-key ${cfg.publicKeyFile} \
+            --private-key ${cfg.privateKeyFile} \
+            --configuration-limit ${toString configurationLimit} \
+            ${config.boot.loader.efi.efiSysMountPoint} \
+            /nix/var/nix/profiles/system-*-link
+        '' else throw "Unknown bootloader: ${cfg.bootloader}")
+      );
     };
 
     systemd.services.fwupd = lib.mkIf config.services.fwupd.enable {
