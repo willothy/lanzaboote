@@ -73,7 +73,10 @@ impl<S: Signer> Installer<S> {
     }
 
     pub fn install(&mut self) -> Result<()> {
-        log::info!("Installing Lanzaboote with rEFInd to {:?}...", self.esp_paths.esp);
+        log::info!(
+            "Installing Lanzaboote with rEFInd to {:?}...",
+            self.esp_paths.esp
+        );
 
         let mut links = self
             .generation_links
@@ -135,7 +138,10 @@ impl<S: Signer> Installer<S> {
     }
 
     /// Install all generations from the provided `GenerationLinks`.
-    fn install_generations_from_links(&mut self, links: &[GenerationLink]) -> Result<Vec<Generation>> {
+    fn install_generations_from_links(
+        &mut self,
+        links: &[GenerationLink],
+    ) -> Result<Vec<Generation>> {
         let generations = links
             .iter()
             .filter_map(|link| {
@@ -355,20 +361,22 @@ impl<S: Signer> Installer<S> {
         // Generate rEFInd configuration
         let config_content = self.generate_refind_config(generations)?;
 
-        fs::write(&self.esp_paths.refind_config, config_content)
-            .with_context(|| {
-                format!(
-                    "Failed to write rEFInd configuration to {:?}",
-                    &self.esp_paths.refind_config
-                )
-            })?;
+        fs::write(&self.esp_paths.refind_config, config_content).with_context(|| {
+            format!(
+                "Failed to write rEFInd configuration to {:?}",
+                &self.esp_paths.refind_config
+            )
+        })?;
 
         Ok(())
     }
 
     /// Install extra files (themes, icons, etc.) to the rEFInd directory.
     fn install_extra_files(&self, extra_files_dir: &Path) -> Result<()> {
-        log::info!("Installing rEFInd extra files from {:?}...", extra_files_dir);
+        log::info!(
+            "Installing rEFInd extra files from {:?}...",
+            extra_files_dir
+        );
 
         // Walk through all files in the extra files directory
         for entry in walkdir::WalkDir::new(extra_files_dir)
@@ -425,18 +433,24 @@ impl<S: Signer> Installer<S> {
 
         if let Some(latest_generation) = generations_rev.next() {
             let stub_path = stub_name(latest_generation, &self.signer)?;
-            let stub_efi_path = format!("/EFI/Linux/{}", stub_path.display());
+            let stub_efi_path = format!("\\EFI\\Linux\\{}", stub_path.display());
 
-            config.push_str(&format!("menuentry \"{}\" {{\n", latest_generation.describe()));
+            config.push_str(&format!(
+                "menuentry \"{}\" {{\n",
+                latest_generation.describe()
+            ));
             config.push_str(&format!("    loader {}\n", stub_efi_path));
             config.push_str("    graphics on\n");
 
             // Add older generations as submenus
             for generation in generations_rev {
                 let stub_path = stub_name(generation, &self.signer)?;
-                let stub_efi_path = format!("/EFI/Linux/{}", stub_path.display());
+                let stub_efi_path = format!("\\EFI\\Linux\\{}", stub_path.display());
 
-                config.push_str(&format!("    submenuentry \"{}\" {{\n", generation.describe()));
+                config.push_str(&format!(
+                    "    submenuentry \"{}\" {{\n",
+                    generation.describe()
+                ));
                 config.push_str(&format!("        loader {}\n", stub_efi_path));
                 config.push_str("        graphics on\n");
                 config.push_str("    }\n");
@@ -451,7 +465,7 @@ impl<S: Signer> Installer<S> {
 
 /// Translate an EFI path to an absolute path on the mounted ESP.
 fn resolve_efi_path(esp: &Path, efi_path: &[u8]) -> Result<PathBuf> {
-    Ok(esp.join(std::str::from_utf8(&efi_path[1..])?.replace('/', "/")))
+    Ok(esp.join(std::str::from_utf8(&efi_path[1..])?.replace('\\', "/")))
 }
 
 /// Compute the file name to be used for the stub of a certain generation, signed with the given key.
