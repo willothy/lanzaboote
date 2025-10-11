@@ -67,7 +67,10 @@ impl<S: Signer> Installer<S> {
     }
 
     pub fn install(&mut self) -> Result<()> {
-        log::info!("Installing Lanzaboote with rEFInd to {:?}...", self.esp_paths.esp);
+        log::info!(
+            "Installing Lanzaboote with rEFInd to {:?}...",
+            self.esp_paths.esp
+        );
 
         let mut links = self
             .generation_links
@@ -344,11 +347,7 @@ impl<S: Signer> Installer<S> {
             }
         }
 
-        install(
-            &self.refind_config,
-            &self.esp_paths.refind_conf,
-        )
-        .with_context(|| {
+        install(&self.refind_config, &self.esp_paths.refind_conf).with_context(|| {
             format!(
                 "Failed to install rEFInd config to {:?}",
                 &self.esp_paths.refind_conf
