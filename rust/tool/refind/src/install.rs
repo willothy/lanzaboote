@@ -425,7 +425,7 @@ impl<S: Signer> Installer<S> {
 
         if let Some(latest_generation) = generations_rev.next() {
             let stub_path = stub_name(latest_generation, &self.signer)?;
-            let stub_efi_path = format!("\\EFI\\Linux\\{}", stub_path.display());
+            let stub_efi_path = format!("/EFI/Linux/{}", stub_path.display());
 
             config.push_str(&format!("menuentry \"{}\" {{\n", latest_generation.describe()));
             config.push_str(&format!("    loader {}\n", stub_efi_path));
@@ -434,7 +434,7 @@ impl<S: Signer> Installer<S> {
             // Add older generations as submenus
             for generation in generations_rev {
                 let stub_path = stub_name(generation, &self.signer)?;
-                let stub_efi_path = format!("\\EFI\\Linux\\{}", stub_path.display());
+                let stub_efi_path = format!("/EFI/Linux/{}", stub_path.display());
 
                 config.push_str(&format!("    submenuentry \"{}\" {{\n", generation.describe()));
                 config.push_str(&format!("        loader {}\n", stub_efi_path));
@@ -451,7 +451,7 @@ impl<S: Signer> Installer<S> {
 
 /// Translate an EFI path to an absolute path on the mounted ESP.
 fn resolve_efi_path(esp: &Path, efi_path: &[u8]) -> Result<PathBuf> {
-    Ok(esp.join(std::str::from_utf8(&efi_path[1..])?.replace('\\', "/")))
+    Ok(esp.join(std::str::from_utf8(&efi_path[1..])?.replace('/', "/")))
 }
 
 /// Compute the file name to be used for the stub of a certain generation, signed with the given key.
