@@ -119,24 +119,6 @@ let
 
   # Generate extra config file
   refindExtraConfigFile = pkgs.writeText "refind-extra.conf" cfg.refind.extraConfig;
-
-  # Utility function to fetch rEFInd themes from GitHub
-  fetchRefindTheme =
-    {
-      owner,
-      repo,
-      rev,
-      sha256,
-      themeName ? repo,
-      themeSubdir ? null,
-    }:
-    let
-      src = pkgs.fetchFromGitHub { inherit owner repo rev sha256; };
-      themeDir = if themeSubdir != null then "${src}/${themeSubdir}" else src;
-    in
-    lib.mapAttrs' (
-      name: _type: lib.nameValuePair "themes/${themeName}/${name}" "${themeDir}/${name}"
-    ) (builtins.readDir themeDir);
 in
 {
   imports = [
@@ -778,10 +760,5 @@ in
     services.fwupd.uefiCapsuleSettings = lib.mkIf config.services.fwupd.enable {
       DisableShimForSecureBoot = true;
     };
-  };
-
-  # Export utilities for use in configurations
-  _module.args.lanzaboote-utils = {
-    inherit fetchRefindTheme;
   };
 }

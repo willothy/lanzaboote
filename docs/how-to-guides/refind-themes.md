@@ -2,46 +2,15 @@
 
 Lanzaboote makes it easy to install rEFInd themes from GitHub. This guide shows you how to use the built-in theme utilities.
 
-## Quick Start: Using Pre-configured Themes
+## Fetching Themes from GitHub
 
-The module includes helpers for popular rEFInd themes:
-
-```nix
-{ config, lanzaboote-utils, ... }:
-{
-  boot.lanzaboote = {
-    enable = true;
-    bootloader = "refind";
-    pkiBundle = "/var/lib/sbctl";
-
-    refind = {
-      # Use a pre-configured theme (you'll need to provide the sha256)
-      extraFiles = lanzaboote-utils.refindThemes.minimal;
-
-      extraConfig = ''
-        include themes/refind-minimal/theme.conf
-      '';
-    };
-  };
-}
-```
-
-### Available Pre-configured Themes
-
-- **minimal** - rEFInd-minimal by evanpurkhiser - Clean, minimal design
-- **minimalist** - minimal-refind-theme by andersfischernielsen
-- **regular** - refind-theme-regular by bobafetthotmail - Colorful with good icon set
-
-> **Note**: You'll need to provide the correct `sha256` hash for these themes. See the "Getting the SHA256" section below.
-
-## Fetching Custom Themes from GitHub
-
-Use the `fetchRefindTheme` function to install any rEFInd theme from GitHub:
+Use the `fetchRefindTheme` function from the lanzaboote library to install any rEFInd theme from GitHub:
 
 ```nix
-{ config, pkgs, lanzaboote-utils, ... }:
+{ inputs, config, pkgs, lib, ... }:
 let
-  myTheme = lanzaboote-utils.fetchRefindTheme {
+  myTheme = inputs.lanzaboote.lib.fetchRefindTheme {
+    inherit pkgs lib;
     owner = "username";
     repo = "my-refind-theme";
     rev = "v1.0.0";  # or "main", "master", etc.
@@ -103,10 +72,11 @@ nix-prefetch-url --unpack https://github.com/username/repo/archive/ref.tar.gz
 Here's a complete example using the rEFInd-minimal theme:
 
 ```nix
-{ config, pkgs, lib, lanzaboote-utils, ... }:
+{ inputs, config, pkgs, lib, ... }:
 let
   # Fetch the theme from GitHub
-  refindMinimal = lanzaboote-utils.fetchRefindTheme {
+  refindMinimal = inputs.lanzaboote.lib.fetchRefindTheme {
+    inherit pkgs lib;
     owner = "evanpurkhiser";
     repo = "rEFInd-minimal";
     rev = "2.1.0";
@@ -153,10 +123,11 @@ in
 You can combine multiple sources and add custom icons:
 
 ```nix
-{ config, lanzaboote-utils, ... }:
+{ inputs, config, pkgs, lib, ... }:
 let
   # Fetch a theme
-  myTheme = lanzaboote-utils.fetchRefindTheme {
+  myTheme = inputs.lanzaboote.lib.fetchRefindTheme {
+    inherit pkgs lib;
     owner = "username";
     repo = "cool-theme";
     rev = "main";
