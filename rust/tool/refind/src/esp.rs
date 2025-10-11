@@ -35,7 +35,7 @@ impl EspPaths<9> for RefindEspPaths {
             efi_fallback_dir: efi_efi_fallback_dir.clone(),
             efi_fallback: efi_efi_fallback_dir.join(architecture.efi_fallback_filename()),
             refind: efi_refind.clone(),
-            refind_binary: efi_refind.join(architecture.efi_fallback_filename()),
+            refind_binary: efi_refind.join(architecture.refind_filename()),
             refind_config: efi_refind.join("refind.conf"),
         }
     }
