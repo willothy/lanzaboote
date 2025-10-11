@@ -16,6 +16,7 @@
 - [Install on Multiple ESPs](how-to-guides/install-on-multiple-esps.md)
 - [Disable Measured Boot](how-to-guides/disable-measured-boot.md)
 - [Use rEFInd](how-to-guides/use-refind.md)
+- [Use rEFInd Themes](how-to-guides/refind-themes.md)
 
 # Explanation
 
