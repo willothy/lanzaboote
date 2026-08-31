@@ -2,17 +2,13 @@
   description = "Secure Boot for NixOS";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable-small";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    flake-parts.url = "github:hercules-ci/flake-parts";
-    flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
-
-    # Only used during development, can be disabled by flake users like this:
-    #  lanzaboote.inputs.pre-commit-hooks-nix.follows = "";
-    pre-commit-hooks-nix = {
-      url = "github:cachix/pre-commit-hooks.nix";
+    # Not used in the flake itself. Only used to make the source available for
+    # the project.
+    pre-commit = {
+      url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-compat.follows = "flake-compat";
     };
 
     crane = {
@@ -23,206 +19,100 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-
-    flake-compat = {
-      url = "github:edolstra/flake-compat";
-      flake = false;
-    };
   };
 
-  outputs = inputs@{ self, nixpkgs, crane, rust-overlay, flake-parts, ... }:
-    flake-parts.lib.mkFlake { inherit inputs; } ({ moduleWithSystem, ... }: {
-      imports = [
-        # Derive the output overlay automatically from all packages that we define.
-        inputs.flake-parts.flakeModules.easyOverlay
-
-        # Formatting and quality checks.
-      ] ++ (if inputs.pre-commit-hooks-nix ? flakeModule then [ inputs.pre-commit-hooks-nix.flakeModule ] else [ ]);
-
-      flake.nixosModules.lanzaboote = moduleWithSystem (
-        perSystem@{ config }:
-        { ... }: {
-          imports = [
-            ./nix/modules/lanzaboote.nix
-          ];
-
-          boot.lanzaboote.package = perSystem.config.packages.tool;
-        }
-      );
-
-      systems = [
+  outputs =
+    {
+      self,
+      nixpkgs,
+      crane,
+      rust-overlay,
+      ...
+    }:
+    let
+      eachSystem = nixpkgs.lib.genAttrs [
         "x86_64-linux"
-
-        # Not actively tested, but may work:
+        # Not tested in CI. Best effort support.
         "aarch64-linux"
       ];
 
-      perSystem = { config, system, pkgs, ... }:
+      # Instantiate only once for each system.
+      #
+      # Still allow flakes users to override dependencies in the normal flake
+      # way.
+      lanzaboote = eachSystem (
+        system:
         let
-          rustTarget = "${pkgs.stdenv.hostPlatform.qemuArch}-unknown-uefi";
-          pkgs = import nixpkgs {
-            system = system;
-            overlays = [
-              rust-overlay.overlays.default
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        import ./. {
+          inherit system pkgs rust-overlay;
+          crane = crane.mkLib pkgs;
+        }
+      );
+    in
+    {
+      # Utility functions, e.g. lanzaboote.lib.fetchRefindTheme.
+      lib = import ./nix/lib;
+
+      nixosModules = {
+        default = self.nixosModules.lanzaboote;
+        lanzaboote = (
+          {
+            config,
+            pkgs,
+            lib,
+            ...
+          }:
+          {
+            imports = [
+              ./nix/modules/lanzaboote.nix
             ];
-          };
 
-          inherit (pkgs) lib;
+            boot.lanzaboote.package =
+              let
+                system = pkgs.stdenv.hostPlatform.system;
+              in
+              lib.mkDefault (
+                if config.boot.lanzaboote.bootloader == "refind" then
+                  self.packages.${system}.lzbt-refind
+                else
+                  self.packages.${system}.lzbt
+              );
+          }
+        );
+      };
 
-          uefi-rust-stable = pkgs.rust-bin.fromRustupToolchainFile ./rust/uefi/rust-toolchain.toml;
-          craneLib = (crane.mkLib pkgs).overrideToolchain uefi-rust-stable;
+      packages = eachSystem (
+        system: builtins.removeAttrs lanzaboote.${system}.packages [ "recurseForDerivations" ]
+      );
 
-          # Build attributes for a Rust application.
-          buildRustApp = lib.makeOverridable (
-            { pname
-            , src
-            , target ? null
-            , doCheck ? true
-              # By default, it builds the default members of the workspace.
-            , packages ? null
-            , extraArgs ? { }
-            }:
-            let
-              commonArgs = {
-                inherit pname;
-                inherit src;
-                CARGO_BUILD_TARGET = target;
-                inherit doCheck;
-
-                # Workaround for https://github.com/ipetkov/crane/issues/262.
-                dummyrs = pkgs.writeText "dummy.rs" ''
-                  #![allow(unused)]
-
-                  #![cfg_attr(
-                    any(target_os = "none", target_os = "uefi"),
-                    no_std,
-                    no_main,
-                  )]
-
-                  #[cfg_attr(any(target_os = "none", target_os = "uefi"), panic_handler)]
-                  fn panic(_info: &::core::panic::PanicInfo<'_>) -> ! {
-                      loop {}
-                  }
-
-                  #[cfg_attr(any(target_os = "none", target_os = "uefi"), export_name = "efi_main")]
-                  fn main() {}
-                '';
-
-                cargoExtraArgs = (extraArgs.cargoExtraArgs or "") + (if packages != null then (lib.concatStringsSep " " (map (p: "--package ${p}") packages)) else "");
-              } // builtins.removeAttrs extraArgs [ "cargoExtraArgs" ];
-
-              cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-            in
-            {
-              package = craneLib.buildPackage (commonArgs // {
-                inherit cargoArtifacts;
-              });
-
-              clippy = craneLib.cargoClippy (commonArgs // {
-                inherit cargoArtifacts;
-                cargoClippyExtraArgs = "-- --deny warnings";
-              });
-
-              rustfmt = craneLib.cargoFmt (commonArgs // { inherit cargoArtifacts; });
-            }
-          );
-
-          stubCrane = buildRustApp {
-            pname = "lanzaboote-stub";
-            src = craneLib.cleanCargoSource ./rust/uefi;
-            target = rustTarget;
-            doCheck = false;
-          };
-
-          stub = stubCrane.package;
-
-          # TODO: when we will have more backends
-          # let's generalize this properly.
-          toolCrane = buildRustApp {
-            pname = "lzbt-systemd";
-            src = ./rust/tool;
-            extraArgs = {
-              TEST_SYSTEMD = pkgs.systemd;
-              nativeCheckInputs = with pkgs; [
-                binutils-unwrapped
-                sbsigntool
-              ];
-            };
-          };
-
-          tool = toolCrane.package;
-
-          wrappedTool = pkgs.runCommand "lzbt"
-            {
-              nativeBuildInputs = [ pkgs.makeWrapper ];
-              meta.mainProgram = "lzbt";
-            } ''
-            mkdir -p $out/bin
-
-            # Clean PATH to only contain what we need to do objcopy. Also
-            # tell lanzatool where to find our UEFI binaries.
-            makeWrapper ${tool}/bin/lzbt-systemd $out/bin/lzbt \
-              --set PATH ${lib.makeBinPath [ pkgs.binutils-unwrapped pkgs.sbsigntool ]} \
-              --set LANZABOOTE_STUB ${stub}/bin/lanzaboote_stub.efi
-          '';
+      # Temporarily include the checks in the flake so that CI picks them up.
+      checks = eachSystem (
+        system:
+        let
+          checks = lanzaboote.${system}.checks;
         in
         {
-          packages = {
-            inherit stub;
-            tool = wrappedTool;
-            lzbt = wrappedTool;
-          };
+          tool = checks.stub.package;
+          toolClippy = checks.stub.clippy;
+          toolRustfmt = checks.stub.rustfmt;
 
-          overlayAttrs = {
-            inherit (config.packages) tool;
-          };
+          stub = checks.stub.package;
+          stubClippy = checks.stub.clippy;
+          stubRustfmt = checks.stub.rustfmt;
 
-          checks = {
-            toolClippy = toolCrane.clippy;
-            stubClippy = stubCrane.clippy;
-            toolFmt = toolCrane.rustfmt;
-            stubFmt = stubCrane.rustfmt;
-          } // (import ./nix/tests {
-            inherit pkgs;
-            extraBaseModules = {
-              inherit (self.nixosModules) lanzaboote;
-            };
-          });
-          devShells.default = pkgs.mkShell {
-            shellHook = ''
-              ${config.pre-commit.installationScript}
-            '';
+          refindTool = checks.lzbt-refind.package;
+          refindToolClippy = checks.lzbt-refind.clippy;
+          refindToolRustfmt = checks.lzbt-refind.rustfmt;
 
-            packages = [
-              pkgs.nixpkgs-fmt
-              pkgs.statix
-              pkgs.cargo-release
-              pkgs.cargo-machete
+          docsHtml = checks.docs.html;
+          docsOptions = checks.docs.options;
 
-              # Convenience for test fixtures in nix/tests.
-              pkgs.openssl
+          inherit (checks) pre-commit;
+        }
+        // builtins.removeAttrs checks.tests [ "recurseForDerivations" ]
+      );
 
-              # Needed for `cargo test` in rust/tool. We also need
-              # TEST_SYSTEMD below for that.
-              pkgs.sbsigntool
-            ];
-
-            inputsFrom = [
-              config.packages.stub
-              config.packages.tool
-            ];
-
-            TEST_SYSTEMD = pkgs.systemd;
-          };
-        } // lib.optionalAttrs (inputs.pre-commit-hooks-nix ? flakeModule) {
-          pre-commit = {
-            check.enable = true;
-
-            settings.hooks = {
-              nixpkgs-fmt.enable = true;
-              typos.enable = true;
-            };
-          };
-        };
-    });
+    };
 }

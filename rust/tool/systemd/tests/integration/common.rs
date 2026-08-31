@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 
 use anyhow::{Context, Result};
-use assert_cmd::Command;
+use assert_cmd::{Command, cargo_bin};
 use base32ct::{Base32Unpadded, Encoding};
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
+use rand::distr::Alphanumeric;
+use rand::{RngExt, rng};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -73,7 +73,35 @@ pub fn setup_generation_link_from_toplevel(
         },
         "org.nix-community.lanzaboote": {
             "sort_key": "lanzaboote",
-        }
+        },
+        "org.nixos.specialisation.v1": {
+          "rescue": {
+            "org.nixos.bootspec.v1": {
+              "init": format!("init-v{}", version),
+              // Normally, these are in the Nix store.
+              "initrd": toplevel.join("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-6.1.1/initrd"),
+              "kernel": toplevel.join("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-6.1.1/kernel"),
+              "kernelParams": [
+                "amd_iommu=on",
+                "amd_iommu=pt",
+                "iommu=pt",
+                "kvm.ignore_msrs=1",
+                "kvm.report_ignored_msrs=0",
+                "udev.log_priority=3",
+                "systemd.unified_cgroup_hierarchy=1",
+                "loglevel=4"
+              ],
+              "label": "LanzaOS",
+              "toplevel": toplevel,
+              "system": SYSTEM,
+            },
+            "org.nix-community.lanzaboote": {
+                "sort_key": "lanzaboote2",
+            },
+            "org.nixos.specialisation.v1": {
+            },
+          },
+        },
     });
 
     let generation_link_path = profiles_directory.join(format!("system-{}-link", version));
@@ -127,7 +155,7 @@ pub fn setup_toplevel(tmpdir: &Path) -> Result<PathBuf> {
 }
 
 fn random_string(length: usize) -> String {
-    thread_rng()
+    rng()
         .sample_iter(&Alphanumeric)
         .take(length)
         .map(char::from)
@@ -154,7 +182,7 @@ pub fn lanzaboote_install(
     let test_loader_config = r"timeout 0\nconsole-mode 1\n";
     fs::write(test_loader_config_path.path(), test_loader_config)?;
 
-    let mut cmd = Command::cargo_bin("lzbt-systemd")?;
+    let mut cmd = Command::new(cargo_bin!("lzbt-systemd"));
     let output = cmd
         .env("LANZABOOTE_STUB", test_systemd_stub)
         .arg("-vv")
@@ -196,11 +224,11 @@ On a system with Nix installed, you can set it with: export TEST_SYSTEMD=$(nix-b
     std::env::var("TEST_SYSTEMD").context(error_msg)
 }
 
-/// Look up the modification time (mtime) of a file.
+/// Look up the modification time (mtime) of a file in nanosecond resolution.
 pub fn mtime(path: &Path) -> i64 {
     fs::metadata(path)
         .expect("Failed to read modification time.")
-        .mtime()
+        .mtime_nsec()
 }
 
 pub fn hash_file(path: &Path) -> sha2::digest::Output<Sha256> {

@@ -1,4 +1,4 @@
-# Lanzaboote: Secure Boot for NixOS
+# Lanzaboote: Secure Boot & Measured Boot for NixOS
 
 [![Chat on Matrix](https://matrix.to/img/matrix-badge.svg)](https://matrix.to/#/#nixos-secure-boot:ukvly.org)
 ![GitHub branch checks state](https://img.shields.io/github/checks-status/blitz/lanzaboote/master)
@@ -6,24 +6,17 @@
 ![GitHub](https://img.shields.io/github/license/blitz/lanzaboote)
 
 This repository contains tooling for [UEFI Secure
-Boot](https://en.wikipedia.org/wiki/UEFI#Secure_Boot) on
-[NixOS](https://nixos.org/). The goal is to make Secure Boot available
-from [nixpkgs](https://github.com/NixOS/nixpkgs) for any platform that
-supports UEFI.
+Boot](https://en.wikipedia.org/wiki/UEFI#Secure_Boot) and [Measured
+Boot](https://0pointer.net/blog/brave-new-trusted-boot-world.html) on
+[NixOS](https://nixos.org/).
 
-## ⚡ Quickstart ⚡
+## Getting Started
 
-If you want to try this out, head over [here](./docs/QUICK_START.md) for instructions.
-In case of any issues, have a look at the [troubleshooting document](./docs/TROUBLESHOOTING.md).
+To start using Lanzaboote head to our [docs](https://nix-community.github.io/lanzaboote)!
 
 ## 🪛 Get Involved 🪛
 
-There is still a bunch of work to do before this work can be
-upstreamed into [nixpkgs](https://github.com/NixOS/nixpkgs). Please
-coordinate in the [Matrix
-room](https://matrix.to/#/#secure-boot:nixos.org) or check the
-[issues](https://github.com/nix-community/lanzaboote/issues), if you
-want to take something up.
+Read the [contributing guide](./CONTRIBUTING.md) to learn how to get involved.
 
 ## Overview
 
@@ -41,7 +34,7 @@ where one trusted component only hands off control to the next part of
 the boot flow when the integrity of the chain is cryptographically
 validated.
 
-### Caveats
+#### Caveats
 
 There are some additional steps that are required to make UEFI Secure
 Boot effective:
@@ -53,7 +46,28 @@ Boot effective:
 
 These steps will not be covered here.
 
-### `lzbt-*`, the Lanzaboote tool
+### Measured Boot
+
+Measured Boot leverages measurements done by a TPM of all relevant boot
+components to bind the encryption of secrets (e.g. your LUKS volume key) to a
+security policy (i.e. expected measurements). This approach is compatible with
+Secure Boot. It can be used as an additional layer of protection against boot
+security threats. However, it could also be used without Secure Boot.
+
+#### Caveats
+
+Just like with Secure Boot, there are some additional steps that are required
+for a secure system:
+
+- Configure the encryption of your root volume with secure options.
+- Protect against confusion attacks. Ideally, for attended systems (e.g. your
+  laptop) with a pin.
+- Backup passphrase or recovery key to avoid data loss in the case of a brittle
+  TPM.
+
+These steps will not be covered here.
+
+### `lzbt`, the Lanzaboote tool
 
 At the moment, boot loaders, kernels and initrds on NixOS are signed
 on the current system. These then need to be prepared as [Unified
@@ -70,9 +84,8 @@ sign all configurations that should be bootable.
 
 We have multiple backends for `lzbt`:
 
-- `lzbt-systemd` lives in [`rust/tool/systemd`](rust/tool/systemd)
-
-In the future, `lzbt` may support more backends.
+- `lzbt-systemd` lives in [`rust/tool/systemd`](rust/tool/systemd) - Uses systemd-boot as the bootloader
+- `lzbt-refind` lives in [`rust/tool/refind`](rust/tool/refind) - Uses rEFInd as the bootloader
 
 Shared code lives in [`rust/tool/shared`](rust/tool/shared).
 
@@ -93,8 +106,6 @@ on the ESP. The chain of trust is maintained by validating the
 signature on the Linux kernel and embedding a cryptographic hash of
 the initrd into the signed UKI.
 
-The stub lives in [`rust/uefi/stub`](rust/uefi/stub).
-
 ### Fwupd
 
 When both Lanzaboote and `services.fwupd` are enabled, for
@@ -103,7 +114,7 @@ binary is placed in `/run` that fwupd will use.
 
 ## State of Upstreaming to Nixpkgs
 
-SecureBoot is available by adding this project to your configuration.
+Secure Boot & Measured Boot is available by adding this project to your configuration.
 
 It relies on [bootspec](https://github.com/NixOS/rfcs/pull/125)
 which is enabled by default since NixOS 23.05.

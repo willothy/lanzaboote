@@ -1,19 +1,29 @@
 [workspace]
-resolver = "2"
+resolver = "3"
 
 members = [
     "shared",
     "systemd",
+    "refind",
 ]
 
 default-members = [
     "shared",
-    "systemd"
+    "systemd",
+    "refind"
 ]
 
 [workspace.package]
-version = "0.4.2"
-edition = "2021"
+version = "1.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = { version = "1.0", default-features = false }
+log = { version = "0.4", default-features = false }
+serde_json = { version = "1.0", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+tempfile = { version = "3.23", default-features = false }
+goblin = { version = "0.10" }
 
 [profile.release]
 opt-level = "s"

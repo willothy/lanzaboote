@@ -1,0 +1,27 @@
+# Summary
+
+[Introduction](introduction.md)
+
+# Getting Started
+
+- [Prepare Your System](getting-started/prepare-your-system.md)
+- [Enable Secure Boot](getting-started/enable-secure-boot.md)
+
+# How-to Guides
+
+- [Automatically Generate Keys](how-to-guides/automatically-generate-keys.md)
+- [Automatically Enroll Keys](how-to-guides/automatically-enroll-keys.md)
+- [Disable Secure Boot](how-to-guides/disable-secure-boot.md)
+- [Enable Measured Boot](how-to-guides/enable-measured-boot.md)
+- [Install on Multiple ESPs](how-to-guides/install-on-multiple-esps.md)
+- [Disable Measured Boot](how-to-guides/disable-measured-boot.md)
+- [Use rEFInd](how-to-guides/use-refind.md)
+- [Use rEFInd Themes](how-to-guides/refind-themes.md)
+
+# Explanation
+
+- [Security Requirements](explanation/security-requirements.md)
+- [Automatic Provisioning](explanation/automatic-provisioning.md)
+- [Windows Dual-Boot & Bitlocker](explanation/windows-dual-boot-bitlocker.md)
+- [Troubleshooting](explanation/troubleshooting.md)
+- [Measured Boot](explanation/measured-boot.md)

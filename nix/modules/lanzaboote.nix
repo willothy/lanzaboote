@@ -1,25 +1,148 @@
-{ lib, config, options, pkgs, ... }:
+{
+  lib,
+  config,
+  options,
+  pkgs,
+  ...
+}:
 let
   cfg = config.boot.lanzaboote;
-
-  sbctlWithPki = pkgs.sbctl.override {
-    databasePath = "/tmp/pki";
-  };
+  espMountPoint = config.boot.loader.efi.efiSysMountPoint;
 
   loaderSettingsFormat = pkgs.formats.keyValue {
-    mkKeyValue = k: v: if v == null then "" else
-    lib.generators.mkKeyValueDefault { } " " k v;
+    mkKeyValue = k: v: if v == null then "" else lib.generators.mkKeyValueDefault { } " " k v;
   };
 
   loaderConfigFile = loaderSettingsFormat.generate "loader.conf" cfg.settings;
 
   configurationLimit = if cfg.configurationLimit == null then 0 else cfg.configurationLimit;
+
+  # Arguments selecting and configuring the backing boot loader.
+  bootloaderArgs =
+    if cfg.bootloader == "refind" then
+      [
+        "--refind ${cfg.refind.package}"
+      ]
+      ++ lib.optional (
+        cfg.refind.configTemplate != null
+      ) "--refind-config-template ${cfg.refind.configTemplate}"
+      ++ lib.optional (cfg.refind.extraConfig != "") "--refind-extra-config ${refindExtraConfigFile}"
+      ++ lib.optional (cfg.refind.extraFiles != { }) "--refind-extra-files ${refindExtraFilesDir}"
+    else
+      [
+        "--systemd ${config.systemd.package}"
+        "--systemd-boot-loader-config ${loaderConfigFile}"
+      ];
+
+  efiSysMountPoints = [
+    espMountPoint
+  ]
+  ++ cfg.extraEfiSysMountPoints;
+
+  mkInstallCommand =
+    efiSysMountPoint:
+    ''
+      PATH=${config.systemd.package}/lib/systemd:$PATH
+      ${cfg.installCommand} \
+    ''
+    + (
+      lib.escapeShellArgs (
+        [
+          "--public-key=${toString cfg.publicKeyFile}"
+          "--private-key=${toString cfg.privateKeyFile}"
+        ]
+        ++ lib.optionals (cfg.measuredBoot.enable && pcr 4) [
+          "--pcrlock-directory=${cfg.measuredBoot.pcrlockDirectory}"
+        ]
+        ++ [
+          efiSysMountPoint
+        ]
+      )
+      + " /nix/var/nix/profiles/system-*-link"
+    );
+
+  installHook = pkgs.writeShellScriptBin "lzbt" (
+    ''
+      ${lib.concatStringsSep "\n" (map mkInstallCommand efiSysMountPoints)}
+    ''
+    + lib.optionalString cfg.measuredBoot.enable ''
+      echo "Predicting the PCR state for future boots..."
+      ${makePolicyCommand}
+    ''
+  );
+
+  format = pkgs.formats.yaml { };
+  sbctlConfigFile = format.generate "sbctl.conf" {
+    keydir = "${cfg.pkiBundle}/keys";
+    guid = "${cfg.pkiBundle}/GUID";
+  };
+
+  json = pkgs.formats.json { };
+
+  pcr = n: lib.elem n cfg.measuredBoot.pcrs;
+
+  staticMeasurements = pkgs.runCommand "pcrlock.d" { preferLocalBuild = true; } ''
+    mkdir -p $out
+
+    for f in ${toString cfg.measuredBoot.upstreamStaticMeasurements}; do
+      mkdir -p $(dirname $out/$f)
+      ln -sf ${config.systemd.package}/lib/pcrlock.d/$f $out/$f
+    done
+
+    ${lib.concatLines (
+      lib.mapAttrsToList (n: v: "ln -s ${v.source} $out/${n}.pcrlock") cfg.measuredBoot.staticMeasurements
+    )}
+  '';
+
+  makePolicyCommand = lib.escapeShellArgs (
+    [
+      "${config.systemd.package}/lib/systemd/systemd-pcrlock"
+      "make-policy"
+      "--components=${staticMeasurements}"
+      "--components=${cfg.measuredBoot.pcrlockDirectory}"
+      "--policy=${cfg.measuredBoot.pcrlockPolicy}"
+      "--location=770"
+    ]
+    ++ lib.map (pcr: "--pcr=${toString pcr}") cfg.measuredBoot.pcrs
+  );
+
+  # Build a directory with all the extra rEFInd files
+  refindExtraFilesDir = pkgs.runCommand "refind-extra-files" { } ''
+    mkdir -p $out
+    ${lib.concatStringsSep "\n" (
+      lib.mapAttrsToList (dest: src: ''
+        mkdir -p $out/$(dirname "${dest}")
+        cp -r ${src} $out/${dest}
+      '') cfg.refind.extraFiles
+    )}
+  '';
+
+  # Generate extra config file
+  refindExtraConfigFile = pkgs.writeText "refind-extra.conf" cfg.refind.extraConfig;
 in
 {
+  imports = [
+    (lib.mkRemovedOptionModule [ "boot" "lanzaboote" "enrollKeys" ] ''
+      Removed this internal option intended for testig only without replacement.
+    '')
+  ];
+
   options.boot.lanzaboote = {
     enable = lib.mkEnableOption "Enable the LANZABOOTE";
 
-    enrollKeys = lib.mkEnableOption "Do not use this option. Only for used for integration tests! Automatic enrollment of the keys using sbctl";
+    bootloader = lib.mkOption {
+      type = lib.types.enum [
+        "systemd-boot"
+        "refind"
+      ];
+      default = "systemd-boot";
+      description = ''
+        Which bootloader to use with Lanzaboote.
+
+        - systemd-boot: Simple UEFI boot manager (default)
+        - refind: Graphical UEFI boot manager with advanced features
+      '';
+    };
 
     configurationLimit = lib.mkOption {
       default = config.boot.loader.systemd-boot.configurationLimit;
@@ -36,28 +159,28 @@ in
     };
 
     pkiBundle = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+      type = lib.types.nullOr lib.types.externalPath;
       description = "PKI bundle containing db, PK, KEK";
     };
 
     publicKeyFile = lib.mkOption {
       type = lib.types.path;
       default = "${cfg.pkiBundle}/keys/db/db.pem";
-      defaultText = "\${cfg.pkiBundle}/keys/db/db.pem";
+      defaultText = "\${config.boot.lanzaboote.pkiBundle}/keys/db/db.pem";
       description = "Public key to sign your boot files";
     };
 
     privateKeyFile = lib.mkOption {
       type = lib.types.path;
       default = "${cfg.pkiBundle}/keys/db/db.key";
-      defaultText = "\${cfg.pkiBundle}/keys/db/db.key";
+      defaultText = "\${config.boot.lanzaboote.pkiBundle}/keys/db/db.key";
       description = "Private key to sign your boot files";
     };
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.lzbt;
-      defaultText = "pkgs.lzbt";
+      default = if cfg.bootloader == "refind" then pkgs.lzbt-refind else pkgs.lzbt;
+      defaultText = lib.literalExpression "pkgs.lzbt, or pkgs.lzbt-refind when bootloader is \"refind\"";
       description = "Lanzaboote tool (lzbt) package";
     };
 
@@ -73,6 +196,9 @@ in
         console-mode = config.boot.loader.systemd-boot.consoleMode;
         editor = config.boot.loader.systemd-boot.editor;
         default = "nixos-*";
+      }
+      // lib.optionalAttrs cfg.autoEnrollKeys.enable {
+        secure-boot-enroll = "force";
       };
 
       defaultText = ''
@@ -82,6 +208,9 @@ in
           editor = config.boot.loader.systemd-boot.editor;
           default = "nixos-*";
         }
+        // lib.optionalAttrs config.boot.lanzaboote.autoEnrollKeys.enable {
+          secure-boot-enroll = "force";
+        };
       '';
 
       example = lib.literalExpression ''
@@ -109,11 +238,318 @@ in
         https://uapi-group.org/specifications/specs/boot_loader_specification/#sorting
       '';
     };
+
+    bootCounting = {
+      initialTries = lib.mkOption {
+        type = lib.types.ints.u32;
+        default = 0;
+        description = ''
+          The number of boot counting tries to set for new boot entries.
+          Setting this to zero, disables boot counting.
+          See https://systemd.io/AUTOMATIC_BOOT_ASSESSMENT/
+        '';
+      };
+    };
+
+    logLevel = lib.mkOption {
+      type = lib.types.enum [
+        "info"
+        "debug"
+      ];
+      default = "info";
+      description = ''
+        Log level of lzbt.
+      '';
+    };
+
+    installCommand = lib.mkOption {
+      type = lib.types.str;
+      readOnly = true;
+      description = ''
+        The partial command to execute lzbt install. This can be used to build
+        images by adding the directory to install to and the path to the
+        toplevel.
+      '';
+      default = ''
+        # Use the system from the kernel's hostPlatform because this should
+        # always, even in the cross compilation case, be the right system.
+        ${lib.getExe cfg.package} ${lib.optionalString (cfg.logLevel == "debug") "-vv"} install \
+          --system ${config.boot.kernelPackages.stdenv.hostPlatform.system} \
+          ${lib.concatStringsSep " \\\n          " bootloaderArgs} \
+          --configuration-limit ${toString configurationLimit} \
+          --allow-unsigned ${lib.boolToString cfg.allowUnsigned} \
+          --bootcounting-initial-tries ${toString cfg.bootCounting.initialTries}'';
+      defaultText = lib.literalExpression ''
+        ''${lib.getExe config.boot.lanzaboote.package} ''${lib.optionalString (config.boot.lanzaboote.logLevel == "debug") "-vv"} install \
+          --system ''${config.boot.kernelPackages.stdenv.hostPlatform.system} \
+          ''${lib.concatStringsSep " \\\n          " bootloaderArgs} \
+          --configuration-limit ''${toString configurationLimit} \
+          --allow-unsigned ''${lib.boolToString config.boot.lanzaboote.allowUnsigned} \
+          --bootcounting-initial-tries ''${toString config.boot.lanzaboote.bootCounting.initialTries}'';
+    };
+
+    extraEfiSysMountPoints = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      description = ''
+        List of EFI system partition mount points to install the bootloader to (additionally to boot.loader.efi.efiSysMountPoint).
+      '';
+      default = [ ];
+    };
+
+    allowUnsigned = lib.mkEnableOption "" // {
+      description = ''
+        Whether to allow installing unsigned artifacts to the ESP.
+
+        This is useful for installing Lanzaboote where the key is generated during the first boot.
+      '';
+      default = cfg.autoGenerateKeys.enable;
+      defaultText = "config.boot.lanzaboote.autoGenerateKeys.enable";
+    };
+
+    autoGenerateKeys = {
+      enable = lib.mkEnableOption "automatically generating Secure Boot keys if they do not exist";
+    };
+
+    autoEnrollKeys = {
+      enable = lib.mkEnableOption "" // {
+        description = "Whether to automatically enroll the Secure Boot keys.";
+      };
+
+      autoReboot = lib.mkEnableOption "" // {
+        description = ''
+          Whether to automatically reboot after preparing the keys for auto enrollment.
+
+          Enable this to enroll the keys via systemd-boot into the firmware
+          right after they have been provisioned without waiting for a manual reboot.
+        '';
+      };
+
+      includeMicrosoftKeys = lib.mkEnableOption "" // {
+        description = "Whether to include Microsoft keys when enrolling the Secure Boot keys.";
+        default = true;
+      };
+
+      includeFirmwareBuiltinKeys = lib.mkEnableOption "including firmware built-in keys when enrolling the Secure Boot keys";
+
+      includeChecksumsFromTPM = lib.mkEnableOption "" // {
+        description = "Whether to include checksums from the TPM Eventlog when enrolling the Secure Boot keys.";
+      };
+
+      allowBrickingMyMachine = lib.mkEnableOption "" // {
+        description = ''
+          Whether to ignore option ROM signatures when enrolling the Secure
+          Boot keys. This might brick your machine. Be sure you know what
+          you're doing before enabling this.
+
+          See <https://github.com/Foxboron/sbctl/wiki/FAQ#option-rom> for more
+          details.
+        '';
+      };
+    };
+
+    measuredBoot = {
+      enable = lib.mkEnableOption "Measured Boot";
+
+      pcrs = lib.mkOption {
+        type = lib.types.listOf (
+          lib.types.enum [
+            0
+            1
+            2
+            3
+            4
+            7
+          ]
+        );
+        default = [ ];
+        description = ''
+          PCRs to lock via systemd-pcrlock.
+        '';
+      };
+
+      pcrlockDirectory = lib.mkOption {
+        type = lib.types.path;
+        default = "/var/lib/pcrlock.d";
+        description = ''
+          Directory to store the pcrlock files in.
+        '';
+      };
+
+      pcrlockPolicy = lib.mkOption {
+        type = lib.types.path;
+        default = "/var/lib/systemd/pcrlock.json";
+        description = ''
+          Location to store the pcrlock policy in.
+        '';
+      };
+
+      upstreamStaticMeasurements = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [ ];
+        description = ''
+          Filenames of static pcrlock measurements to include from the systemd
+          package.
+        '';
+      };
+
+      staticMeasurements = lib.mkOption {
+        default = { };
+        description = ''
+          Static systemd-pcrlock measurements.
+        '';
+        type = lib.types.attrsOf (
+          lib.types.submodule (
+            {
+              name,
+              config,
+              options,
+              ...
+            }:
+            {
+              options = {
+                source = lib.mkOption {
+                  type = lib.types.path;
+                  description = "Path of the source file.";
+                };
+                json = lib.mkOption {
+                  default = null;
+                  type = lib.types.nullOr json.type;
+                  description = ''
+                    systemd-pcrlock components in their literal form. This option is directly transformed to a JSON.
+                  '';
+                };
+              };
+              config = {
+                source = lib.mkIf (config.json != null) (
+                  lib.mkDerivedConfig options.json (json.generate "${name}.pcrlock")
+                );
+              };
+            }
+          )
+        );
+      };
+
+      autoCryptenroll = {
+        enable = lib.mkEnableOption "automatically re-enroll systemd-pcrlock TPM2 policy into LUKS volume";
+
+        device = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            The device that is encrypted via LUKS2 to enroll the TPM2 policy into.
+
+            This is useful for unattended systems to upgrade a LUKS2 volume
+            from being locked against a static PCR to a full systemd-pcrlock
+            policy.
+          '';
+        };
+
+        autoReboot = lib.mkEnableOption "" // {
+          description = ''
+            Whether to automatically reboot after preparing the measurements.
+
+            Enable this to enroll the new systemd-pcrlock policy with full
+            protection without having to wait for a manual reboot.
+
+            When you combine this with automatically provisioning Secure Boot,
+            you generally don't need to reboot after autoCryptenroll.
+          '';
+        };
+      };
+    };
+
+    refind = {
+      package = lib.mkOption {
+        type = lib.types.package;
+        default = pkgs.refind;
+        defaultText = lib.literalExpression "pkgs.refind";
+        description = "rEFInd package to use";
+      };
+
+      configTemplate = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = ''
+          Optional custom rEFInd configuration template.
+          This will be appended to the auto-generated configuration.
+        '';
+      };
+
+      extraConfig = lib.mkOption {
+        type = lib.types.lines;
+        default = "";
+        example = ''
+          # Custom rEFInd settings
+          resolution 1920 1080
+          use_graphics_for linux
+          scanfor manual
+        '';
+        description = ''
+          Additional rEFInd configuration to append to the generated config.
+          This is appended after the template (if provided) and before the
+          auto-generated NixOS boot entries.
+        '';
+      };
+
+      extraFiles = lib.mkOption {
+        type = lib.types.attrsOf lib.types.path;
+        default = { };
+        example = lib.literalExpression ''
+          {
+            "themes/my-theme/theme.conf" = ./my-theme/theme.conf;
+            "themes/my-theme/background.png" = ./my-theme/background.png;
+            "themes/my-theme/icons/os_nixos.png" = ./my-theme/icons/os_nixos.png;
+          }
+        '';
+        description = ''
+          Additional files to install to the rEFInd directory on the ESP.
+          The attribute name is the relative path under EFI/refind/,
+          and the value is the source file path.
+
+          This is useful for installing themes, custom icons, or drivers.
+
+          Example for a complete theme:
+          ```nix
+          extraFiles = {
+            "themes/my-theme/theme.conf" = ./my-theme/theme.conf;
+            "themes/my-theme/background.png" = ./my-theme/background.png;
+            "themes/my-theme/icons/os_nixos.png" = ./my-theme/icons/os_nixos.png;
+          };
+
+          extraConfig = '''
+            include themes/my-theme/theme.conf
+          ''';
+          ```
+        '';
+      };
+    };
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = !cfg.autoEnrollKeys.allowBrickingMyMachine -> cfg.autoEnrollKeys.includeMicrosoftKeys;
+        message = ''
+          You have set potentially dangerous Secure Boot enrollment settings. This might brick your machine.
+
+            You have two options:
+            1. Include the Microsoft keys via autoEnrollKeys.includeMicrosoftKeys
+            2. Accept the risk via autoEnrollKeys.allowBrickingMyMachine
+        '';
+      }
+      {
+        assertion = cfg.measuredBoot.enable -> (configurationLimit > 0 && configurationLimit <= 8);
+        message = ''
+          If Measured Boot is enabled, you cannot store more than 8 generations on the ESP.
+
+            This is a strict limit required and enforced by systemd-pcrlock.
+
+            Set `boot.lanzaboote.configurationLimit = 8;` to reduce the number of generations you store.
+        '';
+      }
+    ];
+
     boot.bootspec = {
-      enable = true;
       extensions."org.nix-community.lanzaboote" = {
         sort_key = config.boot.lanzaboote.sortKey;
       };
@@ -121,25 +557,180 @@ in
     boot.loader.supportsInitrdSecrets = true;
     boot.loader.external = {
       enable = true;
-      installHook = pkgs.writeShellScript "bootinstall" ''
-        ${lib.optionalString cfg.enrollKeys ''
-          ${lib.getExe' pkgs.coreutils "mkdir"} -p /tmp/pki
-          ${lib.getExe' pkgs.coreutils "cp"} -r ${cfg.pkiBundle}/* /tmp/pki
-          ${lib.getExe sbctlWithPki} enroll-keys --yes-this-might-brick-my-machine
-        ''}
+      installHook = "${installHook}/bin/lzbt";
+    };
+    boot.lanzaboote.measuredBoot.upstreamStaticMeasurements =
+      lib.optionals (pcr 0 || pcr 1 || pcr 2 || pcr 3 || pcr 4) [
+        "500-separator.pcrlock.d/300-0x00000000.pcrlock"
+      ]
+      ++ lib.optionals (pcr 4) [
+        "350-action-efi-application.pcrlock"
+      ]
+      ++ lib.optionals (pcr 7) [
+        "400-secureboot-separator.pcrlock.d/300-0x00000000.pcrlock"
+      ];
 
-        # Use the system from the kernel's hostPlatform because this should
-        # always, even in the cross compilation case, be the right system.
-        ${lib.getExe cfg.package} install \
-          --system ${config.boot.kernelPackages.stdenv.hostPlatform.system} \
-          --systemd ${config.systemd.package} \
-          --systemd-boot-loader-config ${loaderConfigFile} \
-          --public-key ${cfg.publicKeyFile} \
-          --private-key ${cfg.privateKeyFile} \
-          --configuration-limit ${toString configurationLimit} \
-          ${config.boot.loader.efi.efiSysMountPoint} \
-          /nix/var/nix/profiles/system-*-link
-      '';
+    environment.etc."sbctl/sbctl.conf" =
+      lib.mkIf (cfg.autoGenerateKeys.enable || cfg.autoEnrollKeys.enable)
+        {
+          source = sbctlConfigFile;
+        };
+
+    # Write this to /etc so that manually calling systemd-pcrlock by the user
+    # still works without them having to specify the directory.
+    environment.etc."pcrlock" = lib.mkIf cfg.measuredBoot.enable {
+      target = "pcrlock.d";
+      source = staticMeasurements;
+    };
+
+    systemd.additionalUpstreamSystemUnits = lib.mkIf cfg.measuredBoot.enable [
+      "systemd-pcrlock-make-policy.service"
+      "systemd-pcrlock-firmware-code.service"
+      "systemd-pcrlock-firmware-config.service"
+      "systemd-pcrlock-secureboot-policy.service"
+      "systemd-pcrlock-secureboot-authority.service"
+    ];
+    # Since we might want to include PCR7 (the Secure Boot policy) we can only
+    # create these measurements after we have booted in a Secure Boot system
+    # for the first time. Thus, run this only if Secure Boot is already enabled
+    # if we autoEnrollKeys.
+    systemd.services.systemd-pcrlock-secureboot-policy =
+      lib.mkIf (cfg.measuredBoot.enable && cfg.autoEnrollKeys.enable)
+        {
+          unitConfig.ConditionSecurity = "uefi-secureboot";
+        };
+    systemd.services.systemd-pcrlock-secureboot-authority =
+      lib.mkIf (cfg.measuredBoot.enable && cfg.autoEnrollKeys.enable)
+        {
+          unitConfig.ConditionSecurity = "uefi-secureboot";
+        };
+
+    systemd.services.systemd-pcrlock-make-policy = lib.mkIf cfg.measuredBoot.enable {
+      wantedBy = [ "sysinit.target" ];
+      # Otherwise, systemd-pcrlock will not be able to write the boot loader
+      # credential to the ESP if you're not using an automounted ESP.
+      after = [ "local-fs.target" ];
+
+      serviceConfig.ExecStart = [
+        "" # unset previous value
+        makePolicyCommand
+      ];
+    };
+    systemd.targets.sysinit = lib.mkIf cfg.measuredBoot.enable {
+      wants =
+        lib.optionals (pcr 0 || pcr 2) [
+          "systemd-pcrlock-firmware-code.service"
+        ]
+        ++ lib.optionals (pcr 1 || pcr 3) [
+          "systemd-pcrlock-firmware-config.service"
+        ]
+        ++ lib.optionals (pcr 7) [
+          "systemd-pcrlock-secureboot-policy.service"
+          "systemd-pcrlock-secureboot-authority.service"
+        ];
+    };
+
+    systemd.services.generate-sb-keys = lib.mkIf cfg.autoGenerateKeys.enable {
+      wantedBy = [ "multi-user.target" ];
+
+      unitConfig = {
+        # Check to make sure keys directory is not present. Needs to check for
+        # a subdirectory of pkiBundle as typically in impermanence-based configs
+        # pkiBundle will be persisted, so it will always exist and is not
+        # a true determination of whether keys have been generated previously.
+        ConditionPathExists = "!${cfg.pkiBundle}/keys";
+      };
+
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStart = "${pkgs.sbctl}/bin/sbctl create-keys";
+      };
+    };
+
+    # Generate the EFI Authenticated Variables from the keys using sbctl, place
+    # them on the ESP, and re-sign all artifacts on the ESP with Lanzaboote.
+    # The actual enrollment of the keys into the firmware is done on the next
+    # boot via systemd-boot.
+    systemd.services.prepare-sb-auto-enroll = lib.mkIf cfg.autoEnrollKeys.enable {
+      wantedBy = [ "multi-user.target" ];
+      after = [ "generate-sb-keys.service" ];
+
+      unitConfig = {
+        ConditionPathExists = [
+          "!${espMountPoint}/loader/keys/auto/PK.auth"
+          "!${espMountPoint}/loader/keys/auto/KEK.auth"
+          "!${espMountPoint}/loader/keys/auto/db.auth"
+        ];
+        SuccessAction = lib.mkIf cfg.autoEnrollKeys.autoReboot "reboot";
+      };
+
+      serviceConfig = {
+        Type = "oneshot";
+        # SuccessAction doesn't trigger if the service is RemainAfterExit
+        RemainAfterExit = lib.mkIf (!cfg.autoEnrollKeys.autoReboot) true;
+        RuntimeDirectory = "prepare-sb-auto-enroll";
+        WorkingDirectory = "/run/prepare-sb-auto-enroll";
+      };
+
+      script =
+        let
+          sbctlArgs = lib.concatStringsSep " " (
+            [ "--export auth" ]
+            ++ lib.optionals cfg.autoEnrollKeys.includeFirmwareBuiltinKeys [ "--firmware-builtin" ]
+            ++ lib.optionals cfg.autoEnrollKeys.includeMicrosoftKeys [ "--microsoft" ]
+            ++ lib.optionals cfg.autoEnrollKeys.includeChecksumsFromTPM [ "--tpm-eventlog" ]
+            ++ lib.optionals cfg.autoEnrollKeys.allowBrickingMyMachine [
+              "--yes-this-might-brick-my-machine"
+            ]
+          );
+        in
+        ''
+          ${pkgs.sbctl}/bin/sbctl enroll-keys ${sbctlArgs}
+
+          mkdir -p ${espMountPoint}/loader/keys/auto
+          install {PK,KEK,db}.auth ${espMountPoint}/loader/keys/auto/
+
+          # Re-sign all the artifacts on the ESP after the new keys have been
+          # auto enrolled.
+          ${installHook}/bin/lzbt
+        '';
+    };
+
+    systemd.services.auto-cryptenroll = lib.mkIf cfg.measuredBoot.autoCryptenroll.enable {
+      wantedBy = [ "multi-user.target" ];
+
+      unitConfig = {
+        ConditionPathExists = [
+          # If this path exists the new policy was already enrolled and thus
+          # does not need to be enrolled again. systemd-pcrlock will update the
+          # policy in place in the same NV index of the TPM.
+          "!/var/lib/auto-cryptenroll/1"
+        ];
+        ConditionSecurity = lib.mkIf cfg.autoEnrollKeys.enable "uefi-secureboot";
+        SuccessAction = lib.mkIf cfg.measuredBoot.autoCryptenroll.autoReboot "reboot";
+      };
+
+      serviceConfig = {
+        Type = "oneshot";
+        # SuccessAction doesn't trigger if the service is RemainAfterExit
+        RemainAfterExit = lib.mkIf (!cfg.measuredBoot.autoCryptenroll.autoReboot) true;
+        StateDirectory = "auto-cryptenroll";
+        ExecStart = [
+          # Re-create all artifacts on the ESP to generate pcrlock measurements
+          # for PCR 4. This will also create a new pcrlock policy.
+          "${installHook}/bin/lzbt"
+          ''
+            systemd-cryptenroll \
+              --wipe-slot=tpm2 \
+              --tpm2-device=auto \
+              --unlock-tpm2-device=auto \
+              --tpm2-pcrlock=${cfg.measuredBoot.pcrlockPolicy} \
+              ${cfg.measuredBoot.autoCryptenroll.device}
+          ''
+        ];
+        ExecStartPost = "${pkgs.coreutils}/bin/touch /var/lib/auto-cryptenroll/1";
+      };
     };
 
     systemd.services.fwupd = lib.mkIf config.services.fwupd.enable {

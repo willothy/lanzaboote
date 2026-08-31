@@ -1,22 +1,35 @@
-{ config, pkgs, ... }: {
+{ config, lib, ... }:
 
-  virtualisation = {
-    useBootLoader = true;
-    useEFIBoot = true;
-    useSecureBoot = true;
+let
+  pkiBundle = "/var/lib/lanzaboote-test-fixture";
+in
+{
+  imports = [ ./image.nix ];
 
-    efi.OVMF = pkgs.OVMFFull.fd;
+  options.lanzabooteTest = {
+    keyFixture = lib.mkEnableOption "pkiBundle fixture baked into the image" // {
+      default = true;
+    };
+
+    persistentRoot = lib.mkEnableOption "a persistent root filesystem";
   };
 
-  boot = {
-    loader.timeout = 0;
-    loader.efi.canTouchEfiVariables = true;
+  config = {
+    systemd.tmpfiles.settings = lib.mkIf config.lanzabooteTest.keyFixture {
+      "10-sbctl"."${pkiBundle}".L = {
+        argument = "${../../fixtures/uefi-keys}";
+      };
+    };
 
-    lanzaboote = {
-      enable = true;
-      enrollKeys = config.virtualisation.useSecureBoot;
-      pkiBundle = ../../fixtures/uefi-keys;
+    boot = {
+      loader.timeout = 0;
+      loader.efi.canTouchEfiVariables = true;
+
+      lanzaboote = {
+        enable = true;
+        logLevel = "debug";
+        pkiBundle = lib.mkDefault pkiBundle;
+      };
     };
   };
-
 }

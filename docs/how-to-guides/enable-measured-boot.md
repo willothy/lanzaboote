@@ -1,0 +1,92 @@
+# Enable Measured Boot
+
+This guide will walk you through enabling Measured Boot on a system that
+already has some form of `LUKS2` disk encryption and migrating this `LUKS2`
+volume to Measured Boot.
+
+> [!NOTE]
+> We do not support filesystem level encryption via ZFS or btrfs.
+>
+> While you will be able to use this same basic mechanism (i.e. a managed TPM2
+> policy) for unlocking filesystem level encryption, there is no integration we
+> provide for it. You will have to implement this yourself.
+
+## Check Whether Your System Supports Measured Boot
+
+```console
+$ /run/current-system/systemd/lib/systemd/systemd-pcrlock is-supported
+yes
+```
+
+If this says anything other than `yes`, you will not be able to use Lanzaboote
+for Measured Boot because the TPM in your system is not supported by
+systemd-pcrlock.
+
+## Enable Measured Boot in Your Config
+
+> [!NOTE]
+> If you enable Measured Boot, the maximum allowed `configurationLimit` is 8.
+> This limit is enforced by `systemd-pcrlock` [which currently won't create a
+> policy for more than 8
+> variants](https://github.com/systemd/systemd/issues/41526).
+
+```nix
+boot.initrd.systemd.enable = true;
+boot.lanzaboote = {
+  measuredBoot = {
+    enable = true;
+    pcrs = [
+      0
+      4
+      7
+    ];
+  };
+};
+```
+
+The additional `pcrs` entries `1`, `2`, and `3` might be flaky. You'll have to try out how they behave on your hardware. See [the explanation page for measured boot](../explanation/measured-boot.md).
+
+## Switch to the New Generation
+
+Switch to the new generation:
+
+```
+nixos-rebuild boot
+```
+
+> [!NOTE]
+> If you're using an ephemeral root, you need to persist
+> `boot.lanzaboote.measuredBoot.pcrlockPolicy` and
+> `boot.lanzaboote.measuredBoot.pcrlockDirectory` across reboots.
+
+Now reboot:
+
+```
+reboot
+```
+
+## Enroll the Policy
+
+> [!CAUTION]
+> Always enroll some form of recovery key or passphrase!
+>
+> `systemd-pcrlock` is still considered experimental by systemd. So to avoid
+> data loss in the case of misconfiguration or other TPM issues, you should
+> have some way to manually unlock your volume.
+
+For an attended system like a workstation, you should enforce some kind of user
+secret *in addition* to the TPM for unlocking your encrypted (root) volume.
+Thus, use the option `--tpm2-with-pin=true` for systemd-cryptenroll.
+
+```
+systemd-cryptenroll \
+  --tpm2-device=auto \
+  --tpm2-with-pin=true \
+  --tpm2-pcrlock=/var/lib/systemd/pcrlock.json \
+  /dev/sdX
+```
+
+Congratulations! You are now a proud user of Measured Boot. You will not need
+to re-enroll anything into your LUKS2 volume. Lanzaboote will automatically
+take care of creating measurements and updating the TPM policy whenever you
+update your system via `nixos-rebuild`.

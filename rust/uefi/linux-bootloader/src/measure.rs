@@ -1,3 +1,10 @@
+use crate::{
+    companions::{CompanionInitrd, CompanionInitrdType},
+    efivars::BOOT_LOADER_VENDOR_UUID,
+    tpm::tpm_log_event_ascii,
+    uefi_helpers::{ParsedPe, PeInMemory},
+    unified_sections::UnifiedSection,
+};
 use alloc::{string::ToString, vec::Vec};
 use log::info;
 use uefi::{
@@ -6,47 +13,79 @@ use uefi::{
     runtime::{self, VariableAttributes},
 };
 
-use crate::{
-    companions::{CompanionInitrd, CompanionInitrdType},
-    efivars::BOOT_LOADER_VENDOR_UUID,
-    pe_section::pe_section_data,
-    tpm::tpm_log_event_ascii,
-    uefi_helpers::PeInMemory,
-    unified_sections::UnifiedSection,
-};
-
+const TPM_PCR_INDEX_BOOT_LOADER: PcrIndex = PcrIndex(4);
 /// This is where any stub payloads are extended, e.g. kernel ELF image, embedded initrd
 /// and so on.
 /// Compared to PCR4, this contains only the unified sections rather than the whole PE image as-is.
+///
+/// Per the [UKI specification](https://uapi-group.org/specifications/specs/unified_kernel_image/#uki-tpm-pcr-measurements):
+/// "For each section two measurements shall be made into PCR 11 with the event code EV_IPL:
+///
+/// 1. The section name in ASCII (including one trailing NUL byte)
+/// 2. The (binary) section contents"
+///
+/// Measurements are made in canonical order, interleaved: section name, section data, next section name, etc.
 const TPM_PCR_INDEX_KERNEL_IMAGE: PcrIndex = PcrIndex(11);
 /// This is where lanzastub extends the kernel command line and any passed credentials into
 const TPM_PCR_INDEX_KERNEL_CONFIG: PcrIndex = PcrIndex(12);
 /// This is where we extend the initrd sysext images into which we pass to the booted kernel
 const TPM_PCR_INDEX_SYSEXTS: PcrIndex = PcrIndex(13);
 
-pub fn measure_image(image: &PeInMemory) -> uefi::Result<u32> {
-    // SAFETY: We get a slice that represents our currently running
-    // image and then parse the PE data structures from it. This is
-    // safe, because we don't touch any data in the data sections that
-    // might conceivably change while we look at the slice.
-    // (data sections := all unified sections that can be measured.)
-    let pe_binary = unsafe { image.as_slice() };
-    let pe = goblin::pe::PE::parse(pe_binary).map_err(|_err| uefi::Status::LOAD_ERROR)?;
+/// Measure arbitrary data into PCR 4 via an IPL event.
+pub fn measure_boot_loader(buffer: &[u8], description: &str) -> uefi::Result<()> {
+    tpm_log_event_ascii(TPM_PCR_INDEX_BOOT_LOADER, buffer, description)
+}
+
+pub fn measure_image(
+    image: &PeInMemory,
+    kernel_data: &[u8],
+    initrd_data: &[u8],
+) -> uefi::Result<u32> {
+    let pe = ParsedPe::from_pe_in_memory(image)?;
+    // Build a list of unified_sections and sort by canonical order.
+    // Per UKI spec: "shall measure the sections listed above, starting from the .linux section,
+    // in the order as listed (which should be considered the canonical order)."
+    let mut sections_to_measure = Vec::new();
+    for section_name in pe.sections() {
+        if let Ok(unified_section) = UnifiedSection::try_from(section_name) {
+            if unified_section.should_be_measured() {
+                sections_to_measure.push(unified_section);
+            }
+        }
+    }
+    sections_to_measure.sort();
 
     let mut measurements = 0;
-    for section in pe.sections {
-        let section_name = section.name().map_err(|_err| uefi::Status::UNSUPPORTED)?;
-        if let Ok(unified_section) = UnifiedSection::try_from(section_name) {
-            // UNSTABLE: && in the previous if is an unstable feature
-            // https://github.com/rust-lang/rust/issues/53667
-            if unified_section.should_be_measured() {
-                // Here, perform the TPM log event in ASCII.
-                if let Some(data) = pe_section_data(pe_binary, &section) {
-                    info!("Measuring section `{}`...", section_name);
-                    if tpm_log_event_ascii(TPM_PCR_INDEX_KERNEL_IMAGE, &data, section_name)? {
-                        measurements += 1;
-                    }
-                }
+    for unified_section in sections_to_measure {
+        let section_name = unified_section.name();
+
+        let section_data = pe.section_data(section_name);
+        let data = match unified_section {
+            // Use kernel/initrd data that were loaded from file system to match systemd-stub's measuring
+            UnifiedSection::Linux => Some(kernel_data),
+            UnifiedSection::Initrd => Some(initrd_data),
+            _ => section_data.as_deref(),
+        };
+
+        if let Some(data) = data {
+            info!("Measuring section `{}`...", section_name);
+
+            // Per UKI spec: "For each section two measurements shall be made into PCR 11"
+            // 1. "The section name in ASCII (including one trailing NUL byte)"
+            let section_name_ascii = alloc::format!("{}\0", section_name);
+            if tpm_log_event_ascii(
+                TPM_PCR_INDEX_KERNEL_IMAGE,
+                section_name_ascii.as_bytes(),
+                section_name,
+            )
+            .is_ok()
+            {
+                measurements += 1;
+            }
+
+            // 2. "The (binary) section contents"
+            if tpm_log_event_ascii(TPM_PCR_INDEX_KERNEL_IMAGE, data, section_name).is_ok() {
+                measurements += 1;
             }
         }
     }
@@ -92,7 +131,9 @@ pub fn measure_companion_initrds(companions: &[CompanionInitrd]) -> uefi::Result
                     TPM_PCR_INDEX_KERNEL_CONFIG,
                     initrd.cpio.as_ref(),
                     "Credentials initrd",
-                )? {
+                )
+                .is_ok()
+                {
                     measurements += 1;
                     credentials_measured += 1;
                 }
@@ -102,7 +143,9 @@ pub fn measure_companion_initrds(companions: &[CompanionInitrd]) -> uefi::Result
                     TPM_PCR_INDEX_KERNEL_CONFIG,
                     initrd.cpio.as_ref(),
                     "Global credentials initrd",
-                )? {
+                )
+                .is_ok()
+                {
                     measurements += 1;
                     credentials_measured += 1;
                 }
@@ -112,7 +155,9 @@ pub fn measure_companion_initrds(companions: &[CompanionInitrd]) -> uefi::Result
                     TPM_PCR_INDEX_SYSEXTS,
                     initrd.cpio.as_ref(),
                     "System extension initrd",
-                )? {
+                )
+                .is_ok()
+                {
                     measurements += 1;
                     sysext_measured = true;
                 }

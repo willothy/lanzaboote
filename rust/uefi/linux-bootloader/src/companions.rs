@@ -1,13 +1,12 @@
-use crate::cpio::{pack_cpio, Cpio};
+use crate::cpio::{Cpio, pack_cpio};
 use alloc::{string::ToString, vec::Vec};
 use uefi::{
-    cstr16,
+    CString16, cstr16,
     fs::{Path, PathBuf},
     proto::device_path::{
-        text::{AllowShortcuts, DisplayOnly},
         DevicePath,
+        text::{AllowShortcuts, DisplayOnly},
     },
-    CString16,
 };
 
 /// Locate files with ASCII filenames and matching the suffix passed as a parameter.
@@ -47,7 +46,7 @@ pub fn get_default_dropin_directory(
     // But this is as much tedious as performing a conversion to string
     // then opening the root directory and finding the new directory.
     let mut target_directory = loaded_image_file_path
-        .to_string(DisplayOnly(false), AllowShortcuts(false))
+        .to_string16(DisplayOnly(false), AllowShortcuts(false))
         .map_err(|_dpp_error| {
             log::warn!("Failed to obtain string representation of the loaded image file path");
             uefi::Error::new(uefi::Status::NOT_FOUND, ())
