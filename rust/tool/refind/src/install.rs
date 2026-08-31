@@ -505,12 +505,19 @@ impl<S: Signer> Installer<S> {
         // Generate rEFInd configuration
         let config_content = self.generate_refind_config(generations)?;
 
-        fs::write(&self.esp_paths.refind_config, config_content).with_context(|| {
-            format!(
-                "Failed to write rEFInd configuration to {:?}",
-                &self.esp_paths.refind_config
-            )
-        })?;
+        // rEFInd loads refind.conf from the directory it was itself loaded
+        // from, so both installed copies need one. Without the fallback copy,
+        // a firmware that boots EFI/BOOT (no NVRAM entry, cleared CMOS, a new
+        // disk) gets no config at all, silently falls back to auto-scanning,
+        // and can pick the bare kernel - which boots with no initrd and no
+        // command line, and hangs.
+        for target in [
+            &self.esp_paths.refind_config,
+            &self.esp_paths.efi_fallback_config,
+        ] {
+            fs::write(target, &config_content)
+                .with_context(|| format!("Failed to write rEFInd configuration to {target:?}"))?;
+        }
 
         Ok(())
     }

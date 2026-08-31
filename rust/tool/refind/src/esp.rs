@@ -12,12 +12,15 @@ pub struct RefindEspPaths {
     pub linux: PathBuf,
     pub efi_fallback_dir: PathBuf,
     pub efi_fallback: PathBuf,
+    /// rEFInd reads its config from the directory it was loaded from, so the
+    /// fallback copy needs one of its own.
+    pub efi_fallback_config: PathBuf,
     pub refind: PathBuf,
     pub refind_binary: PathBuf,
     pub refind_config: PathBuf,
 }
 
-impl EspPaths<9> for RefindEspPaths {
+impl EspPaths<10> for RefindEspPaths {
     fn new(esp: impl AsRef<Path>, architecture: Architecture) -> Self {
         let esp = esp.as_ref();
         let efi = esp.join("EFI");
@@ -33,6 +36,7 @@ impl EspPaths<9> for RefindEspPaths {
             linux: efi_linux,
             efi_fallback_dir: efi_efi_fallback_dir.clone(),
             efi_fallback: efi_efi_fallback_dir.join(architecture.efi_fallback_filename()),
+            efi_fallback_config: efi_efi_fallback_dir.join("refind.conf"),
             refind: efi_refind.clone(),
             refind_binary: efi_refind.join(architecture.efi_fallback_filename()),
             refind_config: efi_refind.join("refind.conf"),
@@ -47,7 +51,7 @@ impl EspPaths<9> for RefindEspPaths {
         &self.linux
     }
 
-    fn iter(&self) -> std::array::IntoIter<&PathBuf, 9> {
+    fn iter(&self) -> std::array::IntoIter<&PathBuf, 10> {
         [
             &self.esp,
             &self.efi,
@@ -55,6 +59,7 @@ impl EspPaths<9> for RefindEspPaths {
             &self.linux,
             &self.efi_fallback_dir,
             &self.efi_fallback,
+            &self.efi_fallback_config,
             &self.refind,
             &self.refind_binary,
             &self.refind_config,

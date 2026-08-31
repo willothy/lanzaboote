@@ -13,6 +13,7 @@ let
 in
 {
   basic = runTest ./lanzaboote/basic.nix;
+  refind = runTest ./lanzaboote/refind.nix;
   systemd-initrd = runTest ./lanzaboote/systemd-initrd.nix;
   initrd-secrets = runTest ./lanzaboote/initrd-secrets.nix;
   initrd-secrets-update = runTest ./lanzaboote/initrd-secrets-update.nix;
