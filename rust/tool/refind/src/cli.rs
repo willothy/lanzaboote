@@ -4,7 +4,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use crate::install;
-use lanzaboote_tool::{architecture::Architecture, signature::local::LocalKeyPair};
+use lanzaboote_tool::{
+    architecture::Architecture,
+    signature::{EmptyKeyPair, LocalKeyPair},
+};
 
 /// The default log level.
 ///
@@ -50,6 +53,10 @@ struct InstallCommand {
     #[arg(long)]
     refind_extra_files: Option<PathBuf>,
 
+    /// Allow installing unsigned artifacts
+    #[arg(long, num_args = 1)]
+    allow_unsigned: bool,
+
     /// sbsign Public Key
     #[arg(long)]
     public_key: Option<PathBuf>,
@@ -61,6 +68,13 @@ struct InstallCommand {
     /// Configuration limit
     #[arg(long, default_value_t = 1)]
     configuration_limit: usize,
+
+    /// Initial number of boot counting tries, set to zero to disable boot counting
+    #[arg(long, default_value_t = 0)]
+    bootcounting_initial_tries: u32,
+
+    #[arg(long)]
+    pcrlock_directory: Option<PathBuf>,
 
     /// EFI system partition mountpoint (e.g. efiSysMountPoint)
     esp: PathBuf,
@@ -98,22 +112,32 @@ fn install(args: InstallCommand) -> Result<()> {
     let lanzaboote_stub =
         std::env::var("LANZABOOTE_STUB").context("Failed to read LANZABOOTE_STUB env variable")?;
 
-    let local_signer = LocalKeyPair::new(
-        &args.public_key.expect("Failed to obtain public key"),
-        &args.private_key.expect("Failed to obtain private key"),
-    );
+    let public_key = &args.public_key.expect("Failed to obtain public key");
+    let private_key = &args.private_key.expect("Failed to obtain private key");
 
-    install::Installer::new(
-        PathBuf::from(lanzaboote_stub),
+    let installer_builder = install::InstallerBuilder::new(
+        lanzaboote_stub,
         Architecture::from_nixos_system(&args.system)?,
         args.refind,
         args.refind_config_template,
         args.refind_extra_config,
         args.refind_extra_files,
-        local_signer,
         args.configuration_limit,
+        args.bootcounting_initial_tries,
+        args.pcrlock_directory,
         args.esp,
         args.generations,
-    )
-    .install()
+    );
+
+    if args.allow_unsigned
+        && std::fs::exists(public_key).ok().is_none_or(|b| !b)
+        && std::fs::exists(private_key).ok().is_none_or(|b| !b)
+    {
+        log::warn!("No keys provided. Installing unsigned artifacts.");
+        let signer = EmptyKeyPair;
+        installer_builder.build(signer).install()
+    } else {
+        let signer = LocalKeyPair::new(public_key, private_key);
+        installer_builder.build(signer).install()
+    }
 }

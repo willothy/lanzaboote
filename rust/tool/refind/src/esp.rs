@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use crate::architecture::RefindArchitectureExt;
 use lanzaboote_tool::architecture::Architecture;
 use lanzaboote_tool::esp::EspPaths;
 
